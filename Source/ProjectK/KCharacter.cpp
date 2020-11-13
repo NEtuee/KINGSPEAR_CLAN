@@ -12,6 +12,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "DrawDebugHelpers.h"
+#include "RopeActor.h"
 
 
 AKCharacter::AKCharacter()
@@ -65,6 +66,9 @@ void AKCharacter::BeginPlay()
 	mbIsMustClimbing = false;
 
 	mMovementState = MovementState::Ground;
+
+	GetCapsuleComponent()->OnComponentBeginOverlap.AddDynamic(this, &AKCharacter::OnCharaterOverlapBegin);
+	GetCapsuleComponent()->OnComponentEndOverlap.AddDynamic(this, &AKCharacter::OnCharaterEndOverlap);
 }
 
 void AKCharacter::PostInitializeComponents()
@@ -81,6 +85,14 @@ void AKCharacter::Tick(float DeltaTime)
 	ClimbingMovement(DeltaTime);
 
 	DetectLedge();
+
+	if (mbIsHanging == true)
+	{
+		if (mCurrentOverlappedRope.IsValid())
+		{
+		    SetActorRotation(mCurrentOverlappedRope->GetEndPointRotation());
+		}
+	}
 }
 
 void AKCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -178,11 +190,14 @@ void AKCharacter::DetectLedge()
 	mLedgeDetectCapsule->SetWorldRotation(FRotator::ZeroRotator);
 }
 
+
 void AKCharacter::moveForward(float value)
 {
     const FRotator rotation = Controller->GetControlRotation();
 	const FRotator yawRotation(0,rotation.Yaw,0);
 	FVector direction;
+
+	mInputVerticalDelta = value;
 
 	if (mbIsGrap == true)
 	{
@@ -210,6 +225,17 @@ void AKCharacter::moveForward(float value)
 			}
 		}
 	}
+	else if (mbIsHanging)
+	{
+		if (mCurrentOverlappedRope.IsValid())
+		{   
+		    FVector swingForce;
+			FRotator targetRot = FRotator(0.0f, GetActorRotation().Yaw, 0.0f);
+			/*swingForce = UKismetMathLibrary::GetForwardVector(targetRot)*mInputVerticalDelta + UKismetMathLibrary::GetRightVector(targetRot)*mInputHorizonDelta;*/
+			swingForce = UKismetMathLibrary::GetForwardVector(mFollowCamera->GetComponentRotation())*mInputVerticalDelta + UKismetMathLibrary::GetRightVector(mFollowCamera->GetComponentRotation())*mInputHorizonDelta;
+			mCurrentOverlappedRope->AddSwingForce(swingForce,500.0f);
+		}
+	}
 	else
 	{
 		//지상 앞뒤 이동
@@ -223,6 +249,8 @@ void AKCharacter::moveForward(float value)
 
 void AKCharacter::moveRight(float value)
 {
+    mInputHorizonDelta = value;
+
 	if (mbIsGrap == true)
 	{
 		if (mInputVerticalValue == 0.0f && value != 0.0f)
@@ -244,6 +272,18 @@ void AKCharacter::moveRight(float value)
 			}
 		}
 	}
+	else if (mbIsHanging == true)
+	{
+		if (mCurrentOverlappedRope.IsValid())
+		{
+			FVector swingForce;
+			FRotator targetRot = FRotator(0.0f, GetActorRotation().Yaw, 0.0f);
+			/*swingForce = UKismetMathLibrary::GetForwardVector(targetRot) * mInputVerticalDelta + UKismetMathLibrary::GetRightVector(targetRot) * mInputHorizonDelta;*/
+			//카메라 벡터로 스윙
+			swingForce = UKismetMathLibrary::GetForwardVector(mFollowCamera->GetComponentRotation()) * mInputVerticalDelta + UKismetMathLibrary::GetRightVector(mFollowCamera->GetComponentRotation()) * mInputHorizonDelta;
+			mCurrentOverlappedRope->AddSwingForce(swingForce, 500.0f);
+		}
+	}
 	else
 	{
 		//지상 좌우 이동
@@ -260,6 +300,12 @@ void AKCharacter::moveRight(float value)
 
 void AKCharacter::startClimbing()
 {
+	if (mbIsCanRopeHanging == true)
+	{
+		GrabRope();
+		return;
+	}
+
 	FHitResult hitResult;
 	FCollisionQueryParams params(NAME_None, false, this);
 	bool bResult = GetWorld()->SweepSingleByChannel(
@@ -297,19 +343,35 @@ void AKCharacter::releaseClimbing()
 	if (mbIsGrap == true)
 	{
 	    GetRootComponent()->DetachFromComponent(mDettachRules);
+
+		animInstance->StopGrap();
+		animInstance->StopClimbing();
+		mbIsGrap = false;
+		setMoveMode(EMovementMode::MOVE_Walking);
+
+		FRotator currentRotation = GetActorRotation();
+		if (currentRotation.Pitch != 0.0f)
+		{
+			currentRotation.Pitch = 0.0f;
+			SetActorRotation(currentRotation);
+		}
 	}
 
-	animInstance->StopGrap();
-	animInstance->StopClimbing();
-	mbIsGrap = false;
-	setMoveMode(EMovementMode::MOVE_Walking);
-
-	FRotator currentRotation = GetActorRotation();
-	if (currentRotation.Pitch != 0.0f)
+	if (mbIsHanging == true)
 	{
+		GetRootComponent()->DetachFromComponent(mRopeDettachRules);
+		mbIsHanging = false;
+		
+		FRotator currentRotation = GetActorRotation();
 		currentRotation.Pitch = 0.0f;
+		currentRotation.Roll = 0.0f;
 		SetActorRotation(currentRotation);
+
+		//mFollowCamera->bUsePawnControlRotation = false;
+		//bUseControllerRotationYaw = false;
 	}
+
+	
 
 	mMovementState = MovementState::Ground;
 }
@@ -339,6 +401,35 @@ void AKCharacter::fromWallJump()
 
 		mMovementState = MovementState::Ground;
 	}
+	else if (mbIsHanging == true)
+	{
+		GetRootComponent()->DetachFromComponent(mRopeDettachRules);
+		FRotator targetRot = UKismetMathLibrary::MakeRotFromX(GetVelocity());
+		SetActorRotation(targetRot);
+		FVector launchForce;
+		if (mCurrentOverlappedRope.IsValid())
+		{
+			launchForce = mCurrentOverlappedRope->GetRopeVelocity();
+		}
+		else
+		{
+			return;
+		}
+
+		launchForce.Z = 1000.0f;
+		LaunchCharacter(launchForce,true,true);
+
+		mbIsHanging = false;
+		mMovementState = MovementState::Ground;
+
+		FRotator currentRotation = GetActorRotation();
+		currentRotation.Pitch = 0.0f;
+		currentRotation.Roll = 0.0f;
+		SetActorRotation(currentRotation);
+
+		//mFollowCamera->bUsePawnControlRotation = false;
+		//bUseControllerRotationYaw = false;
+	}
 }
 
 void AKCharacter::setMoveMode(EMovementMode movementMode)
@@ -360,3 +451,44 @@ void AKCharacter::setMoveMode(EMovementMode movementMode)
 		break;
 	}
 }
+
+void AKCharacter::OnCharaterOverlapBegin(class UPrimitiveComponent* overlappedComp, class AActor* otherActor, class UPrimitiveComponent* otherComp, int32 otherBodyIndex, bool bFromSweep, const FHitResult& sweepResult)
+{
+	ARopeActor* overlapRope = Cast<ARopeActor>(otherActor);
+	if (overlapRope != nullptr)
+	{
+		//UE_LOG(LogTemp,Warning,TEXT("Begin Overlap rope"));
+		//캐릭터에 로프 액터와의 충돌이벤트가 발생하면 해당 로프를 약포인터로 저장해둡니다.
+		//그리고 bool 형 변수로 Hanging이 가능함을 저장합니다.
+		mbIsCanRopeHanging = true;
+		mCurrentOverlappedRope = overlapRope;
+	}
+}
+
+void AKCharacter::OnCharaterEndOverlap(UPrimitiveComponent* overlappedComponent, AActor* otherActor, UPrimitiveComponent* otherComp, int32 otherBodyIndex)
+{
+	ARopeActor* overlapRope = Cast<ARopeActor>(otherActor);
+	if (overlapRope != nullptr)
+	{
+	    //캐릭터와 로프의 충돌이벤트가 종료된다면 로프의 약포인터를 null상태로 전환.
+	    mbIsCanRopeHanging = false;
+	    mCurrentOverlappedRope.Reset();
+	}
+}
+
+void AKCharacter::GrabRope()
+{
+	if (mCurrentOverlappedRope.IsValid() && mbIsHanging == false)
+	{
+	    //mFollowCamera->bUsePawnControlRotation = true;
+		//bUseControllerRotationYaw = true;
+		mbIsHanging = true;
+		mMovementState = MovementState::Hanging;
+		FVector currentVelocity = GetCapsuleComponent()->GetPhysicsLinearVelocity();
+		GetCapsuleComponent()->AttachToComponent(mCurrentOverlappedRope->GetEndPoint(),mRopeAttachRules);
+		SetActorLocation(mCurrentOverlappedRope->GetEndPoint()->GetComponentLocation());
+		mCurrentOverlappedRope->AddSwingForce(currentVelocity,200.0f);
+	}
+}
+
+

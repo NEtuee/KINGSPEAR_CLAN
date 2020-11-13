@@ -12,7 +12,8 @@ enum class MovementState : uint8
 	Ground = 0,
 	Climbing,
 	ReverseClimbing,
-	JumpFromWall
+	JumpFromWall,
+	Hanging
 };
 
 UCLASS()
@@ -48,6 +49,15 @@ protected:
 	void setMoveMode(EMovementMode movementMode);
 
 private:
+	UFUNCTION()
+	void OnCharaterOverlapBegin(class UPrimitiveComponent* overlappedComp, class AActor* otherActor, class UPrimitiveComponent* otherComp, int32 otherBodyIndex, bool bFromSweep, const FHitResult& sweepResult);
+
+	UFUNCTION()
+	void OnCharaterEndOverlap(UPrimitiveComponent* overlappedComponent, AActor* otherActor, UPrimitiveComponent* otherComp, int32 otherBodyIndex);
+
+	void GrabRope();
+
+private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	class USpringArmComponent* mCameraBoom;
 
@@ -78,7 +88,17 @@ private:
 
 	FAttachmentTransformRules mAttachRules = FAttachmentTransformRules(EAttachmentRule::KeepWorld, EAttachmentRule::KeepWorld, EAttachmentRule::KeepWorld, true);
 	FDetachmentTransformRules mDettachRules = FDetachmentTransformRules(EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, false);
+	FAttachmentTransformRules mRopeAttachRules = FAttachmentTransformRules(EAttachmentRule::KeepWorld,EAttachmentRule::KeepWorld,EAttachmentRule::KeepWorld,true);
+	FDetachmentTransformRules mRopeDettachRules = FDetachmentTransformRules(EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, true);
+
 
 	float mInputVerticalValue;//W,S 키 입력값
 	float mInputHorizonValue;//A,D 키 입력값
+	float mInputVerticalDelta;//W,S 키 입력 프레임 당 값
+	float mInputHorizonDelta;//A,D 키 입력 프레임 당 값
+
+	bool mbIsCanRopeHanging;//hanging 가능 여부
+	TWeakObjectPtr<class ARopeActor> mCurrentOverlappedRope;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State", meta = (AllowPrivateAccess = "true"))
+	bool mbIsHanging;//hanging 여부
 };
