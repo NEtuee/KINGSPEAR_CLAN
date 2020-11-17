@@ -26,6 +26,12 @@ public:
 
     FRotator GetEndPointRotation() const { return mEndPoint->GetComponentRotation(); }
 
+	void SetEndPointLocation(FVector location);
+
+	void SetCableLength(float length);
+
+	void ReSetConstrained();
+
 protected:
 	virtual void BeginPlay() override;
 

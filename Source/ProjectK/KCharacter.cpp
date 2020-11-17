@@ -12,7 +12,11 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "DrawDebugHelpers.h"
+#include "kismet/GameplayStatics.h"
 #include "RopeActor.h"
+#include "Components/ArrowComponent.h"
+#include "SpearActor.h"
+#include "RopeActor_Climbing.h"
 
 
 AKCharacter::AKCharacter()
@@ -44,6 +48,11 @@ AKCharacter::AKCharacter()
 	mFollowCamera->SetupAttachment(mCameraBoom,USpringArmComponent::SocketName);
 	mFollowCamera->bUsePawnControlRotation = false;
 
+	// 발사 지점 설정
+	mLaunchPos = CreateDefaultSubobject<UArrowComponent>(TEXT("LaunchPos"));
+	mLaunchPos->SetupAttachment(mFollowCamera);
+	mLaunchPos->SetRelativeLocation(FVector(360.0f,0.0f,0.0f));
+
 	//손 IK 컴포넌트 
 	mHandIKComponent = CreateDefaultSubobject<UHandIKComponent>(TEXT("HandIK"));
 
@@ -69,6 +78,12 @@ void AKCharacter::BeginPlay()
 
 	GetCapsuleComponent()->OnComponentBeginOverlap.AddDynamic(this, &AKCharacter::OnCharaterOverlapBegin);
 	GetCapsuleComponent()->OnComponentEndOverlap.AddDynamic(this, &AKCharacter::OnCharaterEndOverlap);
+
+	FName path = TEXT("/Game/Blueprints/BP_RopeActor.BP_RopeActor_C");
+	mGenerateShotRope = Cast<UClass>(StaticLoadObject(UClass::StaticClass(),NULL,*path.ToString()));
+
+	path = TEXT("/Game/Blueprints/SpearActor.SpearActor_C");
+	mGenerateSpear = Cast<UClass>(StaticLoadObject(UClass::StaticClass(),NULL,*path.ToString()));
 }
 
 void AKCharacter::PostInitializeComponents()
@@ -93,6 +108,15 @@ void AKCharacter::Tick(float DeltaTime)
 		    SetActorRotation(mCurrentOverlappedRope->GetEndPointRotation());
 		}
 	}
+
+	if (mbIsAim == true)
+	{
+	    mCameraBoom->SocketOffset = UKismetMathLibrary::VLerp(mCameraBoom->SocketOffset,FVector(250.0f,100.0f,0.0f),0.2f);
+	}
+	else
+	{
+		mCameraBoom->SocketOffset = UKismetMathLibrary::VLerp(mCameraBoom->SocketOffset, FVector(0.0f, 0.0f, 0.0f), 0.2f);
+	}
 }
 
 void AKCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -114,6 +138,13 @@ void AKCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
 	PlayerInputComponent->BindAction("Jump",IE_Pressed,this,&ACharacter::Jump);
 	PlayerInputComponent->BindAction("Jump",IE_Released,this,&ACharacter::StopJumping);
 	PlayerInputComponent->BindAction("Jump",IE_Pressed,this,&AKCharacter::fromWallJump);
+
+	PlayerInputComponent->BindAction("Aim",IE_Pressed,this,&AKCharacter::AimStart);
+	PlayerInputComponent->BindAction("Aim",IE_Released,this,&AKCharacter::AimRelease);
+
+	PlayerInputComponent->BindAction("RopeShot",IE_Pressed,this,&AKCharacter::RopeShot);
+
+	PlayerInputComponent->BindAction("Shot",IE_Pressed,this,&AKCharacter::SpearShot);
 }
 
 void AKCharacter::ClimbingMovement(float deltaTime)
@@ -236,6 +267,15 @@ void AKCharacter::moveForward(float value)
 			mCurrentOverlappedRope->AddSwingForce(swingForce,500.0f);
 		}
 	}
+	else if(mbIsHangingToClimbingRope == true)
+	{
+
+		if (mCurrentClimbingRope.IsValid())
+		{
+		   //UE_LOG(LogTemp,Warning,TEXT("ddd"));
+		   mCurrentClimbingRope->ClimbingRope(value, 200.0f);
+		}
+	}
 	else
 	{
 		//지상 앞뒤 이동
@@ -340,6 +380,11 @@ void AKCharacter::startClimbing()
 
 void AKCharacter::releaseClimbing()
 {
+    if (mbIsHangingToShotRope == true)
+    {
+	    return;
+    }
+
 	if (mbIsGrap == true)
 	{
 	    GetRootComponent()->DetachFromComponent(mDettachRules);
@@ -361,7 +406,8 @@ void AKCharacter::releaseClimbing()
 	{
 		GetRootComponent()->DetachFromComponent(mRopeDettachRules);
 		mbIsHanging = false;
-		
+		//UE_LOG(LogTemp, Warning, TEXT("releaseClimbing"));
+
 		FRotator currentRotation = GetActorRotation();
 		currentRotation.Pitch = 0.0f;
 		currentRotation.Roll = 0.0f;
@@ -369,6 +415,11 @@ void AKCharacter::releaseClimbing()
 
 		//mFollowCamera->bUsePawnControlRotation = false;
 		//bUseControllerRotationYaw = false;
+	}
+
+	if (mbIsHangingToClimbingRope == true)
+	{
+		return;
 	}
 
 	
@@ -421,15 +472,55 @@ void AKCharacter::fromWallJump()
 
 		mbIsHanging = false;
 		mMovementState = MovementState::Ground;
+		//UE_LOG(LogTemp, Warning, TEXT("Jump"));
+
 
 		FRotator currentRotation = GetActorRotation();
 		currentRotation.Pitch = 0.0f;
 		currentRotation.Roll = 0.0f;
 		SetActorRotation(currentRotation);
 
+		if (mbIsHangingToShotRope == true)
+		{
+		   if (mCurrentOverlappedRope.IsValid())
+		   {
+		       mCurrentOverlappedRope->DestroyRope();
+		   }
+			mbIsHangingToShotRope = false;
+		}
+
 		//mFollowCamera->bUsePawnControlRotation = false;
 		//bUseControllerRotationYaw = false;
 	}
+	else if (mbIsHangingToClimbingRope == true)
+	{
+		GetRootComponent()->DetachFromComponent(mRopeDettachRules);
+		FRotator targetRot = UKismetMathLibrary::MakeRotFromX(GetVelocity());
+		SetActorRotation(targetRot);
+		FVector launchForce;
+		/*if (mCurrentClimbingRope.IsValid())
+		{
+			launchForce = mCurrentClimbingRope->GetRopeVelocity();
+		}
+		else
+		{
+			return;
+		}*/
+
+		launchForce.Z = 1000.0f;
+		LaunchCharacter(launchForce, true, true);
+
+		mbIsHangingToClimbingRope = false;
+		mMovementState = MovementState::Ground;
+		UE_LOG(LogTemp, Warning, TEXT("Jump"));
+
+
+		FRotator currentRotation = GetActorRotation();
+		currentRotation.Pitch = 0.0f;
+		currentRotation.Roll = 0.0f;
+		SetActorRotation(currentRotation);
+	}
+
 }
 
 void AKCharacter::setMoveMode(EMovementMode movementMode)
@@ -452,6 +543,65 @@ void AKCharacter::setMoveMode(EMovementMode movementMode)
 	}
 }
 
+void AKCharacter::AimStart()
+{
+     mbIsAim = true;
+
+	 UGameplayStatics::SetGlobalTimeDilation(GetWorld(),0.2f);
+}
+	 
+void AKCharacter::AimRelease()
+{
+     mbIsAim = false;
+	 UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
+
+}
+
+void AKCharacter::RopeShot()
+{
+	if (mbIsAim == true && mbIsHanging == false)
+	{
+	    FVector startPos = mFollowCamera->GetComponentLocation();
+		FVector endPos = startPos + UKismetMathLibrary::GetForwardVector(mFollowCamera->GetComponentRotation())*10000.0f;
+
+		FHitResult hitResult;
+		TArray<AActor*> ignore;
+		ignore.Add(GetOwner());
+
+		bool bResult = UKismetSystemLibrary::LineTraceSingle(GetWorld(),
+		startPos,
+		endPos, UEngineTypes::ConvertToTraceType(ECC_Visibility),
+		false,ignore,EDrawDebugTrace::ForDuration,
+		hitResult,true);
+
+		if (bResult == true)
+		{
+		    FActorSpawnParameters spawnParams;
+			//spawnParams.Owner = this;
+			mCurrentOverlappedRope = GetWorld()->SpawnActor<ARopeActor>(mGenerateShotRope,hitResult.ImpactPoint,FRotator::ZeroRotator);
+
+			if (mCurrentOverlappedRope.IsValid())
+			{
+				mCurrentOverlappedRope->SetEndPointLocation(GetActorLocation());
+				float distance = FVector::Distance(hitResult.ImpactPoint,GetActorLocation());
+				mCurrentOverlappedRope->SetCableLength(distance*0.5f);
+				mbIsHangingToShotRope = true;
+				GrabRope();
+			}
+		}
+	}
+}
+
+void AKCharacter::SpearShot()
+{
+	if (mbIsAim == true)
+	{
+	    GetWorld()->SpawnActor<ASpearActor>(mGenerateSpear,mLaunchPos->GetComponentLocation(),mLaunchPos->GetComponentRotation());
+
+		UGameplayStatics::SetGlobalTimeDilation(GetWorld(), 1.0f);
+	}
+}
+
 void AKCharacter::OnCharaterOverlapBegin(class UPrimitiveComponent* overlappedComp, class AActor* otherActor, class UPrimitiveComponent* otherComp, int32 otherBodyIndex, bool bFromSweep, const FHitResult& sweepResult)
 {
 	ARopeActor* overlapRope = Cast<ARopeActor>(otherActor);
@@ -463,6 +613,15 @@ void AKCharacter::OnCharaterOverlapBegin(class UPrimitiveComponent* overlappedCo
 		mbIsCanRopeHanging = true;
 		mCurrentOverlappedRope = overlapRope;
 	}
+
+	ARopeActor_Climbing* overlapClimbingRope = Cast<ARopeActor_Climbing>(otherActor);
+	if (overlapClimbingRope != nullptr)
+	{
+		mbIsCanRopeHanging = true;
+		mCurrentClimbingRope = overlapClimbingRope;
+		//UE_LOG(LogTemp, Warning, TEXT("Begine"));
+	}
+	
 }
 
 void AKCharacter::OnCharaterEndOverlap(UPrimitiveComponent* overlappedComponent, AActor* otherActor, UPrimitiveComponent* otherComp, int32 otherBodyIndex)
@@ -474,12 +633,21 @@ void AKCharacter::OnCharaterEndOverlap(UPrimitiveComponent* overlappedComponent,
 	    mbIsCanRopeHanging = false;
 	    mCurrentOverlappedRope.Reset();
 	}
+
+	ARopeActor_Climbing* overlapClimbingRope = Cast<ARopeActor_Climbing>(otherActor);
+	if (overlapClimbingRope != nullptr)
+	{
+		mbIsCanRopeHanging = false;
+		mCurrentClimbingRope.Reset();
+		//UE_LOG(LogTemp, Warning, TEXT("End"));
+	}
 }
 
 void AKCharacter::GrabRope()
 {
 	if (mCurrentOverlappedRope.IsValid() && mbIsHanging == false)
 	{
+	    UE_LOG(LogTemp,Warning,TEXT("GrapRope"));
 	    //mFollowCamera->bUsePawnControlRotation = true;
 		//bUseControllerRotationYaw = true;
 		mbIsHanging = true;
@@ -489,6 +657,25 @@ void AKCharacter::GrabRope()
 		SetActorLocation(mCurrentOverlappedRope->GetEndPoint()->GetComponentLocation());
 		mCurrentOverlappedRope->AddSwingForce(currentVelocity,200.0f);
 	}
+
+	if (mCurrentClimbingRope.IsValid() && mbIsHangingToClimbingRope == false)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("ClimbingGrapRope"));
+		TWeakObjectPtr<ARopeActor_Climbing> tempPtr = mCurrentClimbingRope;
+
+		mbIsHangingToClimbingRope = true;
+		mMovementState = MovementState::Hanging;
+		FVector ropeStartLocation = tempPtr->GetStartPoint();
+		tempPtr->UpdateRope(FVector::Distance(ropeStartLocation, GetActorLocation()));
+		FVector currentVelocity = GetCapsuleComponent()->GetPhysicsLinearVelocity();
+		UStaticMeshComponent* temp = tempPtr->GetMiddlePoint();
+		GetCapsuleComponent()->AttachToComponent(tempPtr->GetMiddlePoint(), FAttachmentTransformRules(EAttachmentRule::SnapToTarget, EAttachmentRule::SnapToTarget, EAttachmentRule::KeepWorld, true));
+		mCurrentClimbingRope->AddSwingForce(currentVelocity, 100.0f);
+		UE_LOG(LogTemp, Warning, TEXT("%f"), FVector::Distance(ropeStartLocation, GetActorLocation()));
+		
+	}
 }
+
+
 
 

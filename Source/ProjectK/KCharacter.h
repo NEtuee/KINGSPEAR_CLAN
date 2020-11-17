@@ -48,6 +48,13 @@ protected:
 
 	void setMoveMode(EMovementMode movementMode);
 
+	void AimStart();
+	void AimRelease();
+
+	void RopeShot();
+
+	void SpearShot();
+
 private:
 	UFUNCTION()
 	void OnCharaterOverlapBegin(class UPrimitiveComponent* overlappedComp, class AActor* otherActor, class UPrimitiveComponent* otherComp, int32 otherBodyIndex, bool bFromSweep, const FHitResult& sweepResult);
@@ -64,6 +71,8 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
 	class UCameraComponent* mFollowCamera;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = Camera, meta = (AllowPrivateAccess = "true"))
+	class UArrowComponent* mLaunchPos;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "IK_Hand", meta = (AllowPrivateAccess = "true"))
 	class UHandIKComponent* mHandIKComponent;
@@ -86,6 +95,9 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "WallCheck", meta = (AllowPrivateAccess = "true"))
 	float mClimbingCheckRange;
 
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State", meta = (AllowPrivateAccess = "true"))
+	bool mbIsAim;
+
 	FAttachmentTransformRules mAttachRules = FAttachmentTransformRules(EAttachmentRule::KeepWorld, EAttachmentRule::KeepWorld, EAttachmentRule::KeepWorld, true);
 	FDetachmentTransformRules mDettachRules = FDetachmentTransformRules(EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, EDetachmentRule::KeepWorld, false);
 	FAttachmentTransformRules mRopeAttachRules = FAttachmentTransformRules(EAttachmentRule::KeepWorld,EAttachmentRule::KeepWorld,EAttachmentRule::KeepWorld,true);
@@ -101,4 +113,17 @@ private:
 	TWeakObjectPtr<class ARopeActor> mCurrentOverlappedRope;
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State", meta = (AllowPrivateAccess = "true"))
 	bool mbIsHanging;//hanging 여부
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State", meta = (AllowPrivateAccess = "true"))
+	bool mbIsHangingToClimbingRope;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "State", meta = (AllowPrivateAccess = "true"))
+	bool mbIsHangingToShotRope;//캐릭터가 쏜 로프에 매달려있는지 여부
+
+	UClass* mGenerateShotRope;
+
+	UClass* mGenerateSpear;
+
+	TWeakObjectPtr<class ARopeActor_Climbing> mCurrentClimbingRope;
+	//class ARopeActor_Climbing* mCurrentClimbingRope;
 };

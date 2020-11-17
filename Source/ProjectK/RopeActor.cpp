@@ -96,3 +96,18 @@ FVector ARopeActor::GetRopeVelocity() const
     return mEndPoint->GetPhysicsLinearVelocity();
 }
 
+void ARopeActor::SetEndPointLocation(FVector location)
+{
+    mEndPoint->SetWorldLocation(location);
+}
+
+void ARopeActor::SetCableLength(float length)
+{
+    mCable->CableLength = length;
+}
+
+void ARopeActor::ReSetConstrained()
+{
+	mPhysicsConstraintComponent->SetConstrainedComponents(mStartPoint, NAME_None, mEndPoint, NAME_None);
+}
+
